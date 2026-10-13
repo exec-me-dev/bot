@@ -1,0 +1,67 @@
+import os, re
+from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, Update
+from telegram.ext import (ApplicationBuilder, CommandHandler,
+                          CallbackQueryHandler, ContextTypes)
+
+TOKEN = os.environ["BOT_TOKEN"]      # токен храните в переменной окружения, не в коде
+SELLER = "your_username"             # ваш username без @
+TEST_MODE = True                     # True -> везде пометка «ТЕСТ»
+
+ITEMS = {                            # примерные подарки для теста
+    "1": {"name": "Plush Pepe #123", "price": "250 TON",
+          "link": "https://t.me/nft/PlushPepe-123"},
+    "2": {"name": "Heart Locket #456", "price": "90 TON",
+          "link": "https://t.me/nft/HeartLocket-456"},
+}
+T = "🧪 ТЕСТОВЫЙ РЕЖИМ\n\n" if TEST_MODE else ""
+
+def card(i):
+    it = ITEMS[i]
+    text = (f"{T}🖼 {it['name']}\n\nЦена: {it['price']}\n"
+            f"Продавец: @{SELLER}\nСтатус: в наличии")
+    kb = Kb([[Btn("🛒 Купить", callback_data=f"buy:{i}"),
+              Btn("ℹ️ Подробнее", url=it["link"])],
+             [Btn("💬 Написать продавцу", url=f"https://t.me/{SELLER}")]])
+    return text, kb
+
+async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    rows = [[Btn(v["name"], callback_data=f"show:{k}")] for k, v in ITEMS.items()]
+    await u.message.reply_text(
+        "Каталог. Добавить подарок: /add <ссылка> <цена>", reply_markup=Kb(rows))
+
+async def add(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    # /add https://t.me/nft/PlushPepe-123 250 TON
+    if not c.args or not (m := re.match(r"https://t\.me/nft/([A-Za-z]+)-(\d+)", c.args[0])):
+        return await u.message.reply_text("Формат: /add https://t.me/nft/Имя-123 250 TON")
+    i = str(len(ITEMS) + 1)
+    ITEMS[i] = {"name": f"{m[1]} #{m[2]}", "price": " ".join(c.args[1:]) or "договорная",
+                "link": c.args[0]}
+    text, kb = card(i)
+    await u.message.reply_text(text, reply_markup=kb)
+
+async def pin(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    i = c.args[0] if c.args else "1"
+    text, kb = card(i)
+    msg = await u.effective_chat.send_message(text, reply_markup=kb)
+    await c.bot.pin_chat_message(u.effective_chat.id, msg.message_id,
+                                 disable_notification=True)
+
+async def buttons(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    act, i = q.data.split(":")
+    if act == "show":
+        text, kb = card(i); await q.edit_message_text(text, reply_markup=kb)
+    elif act == "buy":
+        it = ITEMS[i]
+        await q.edit_message_text(
+            f"{T}🛒 Заказ оформлен\n\nТовар: {it['name']}\nЦена: {it['price']}\n"
+            f"Продавец: @{SELLER}\n\nПроверьте подарок по ссылке до оплаты.",
+            reply_markup=Kb([[Btn("🔗 Открыть подарок", url=it["link"]),
+                              Btn("❌ Отменить", callback_data=f"show:{i}")]]))
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("add", add))
+app.add_handler(CommandHandler("pin", pin))
+app.add_handler(CallbackQueryHandler(buttons))
+app.run_polling()
