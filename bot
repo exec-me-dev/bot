@@ -1,67 +1,53 @@
-import os, re
-from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, Update
-from telegram.ext import (ApplicationBuilder, CommandHandler,
-                          CallbackQueryHandler, ContextTypes)
+import re
+import random
+from telethon import TelegramClient, functions
+from telethon.tl.types import StarsAmount
 
-TOKEN = os.environ["BOT_TOKEN"]      # токен храните в переменной окружения, не в коде
-SELLER = "your_username"             # ваш username без @
-TEST_MODE = True                     # True -> везде пометка «ТЕСТ»
+API_ID = 123456              # с my.telegram.org
+API_HASH = "your_api_hash"   # с my.telegram.org
+SESSION_NAME = "offer_session"
 
-ITEMS = {                            # примерные подарки для теста
-    "1": {"name": "Plush Pepe #123", "price": "250 TON",
-          "link": "https://t.me/nft/PlushPepe-123"},
-    "2": {"name": "Heart Locket #456", "price": "90 TON",
-          "link": "https://t.me/nft/HeartLocket-456"},
-}
-T = "🧪 ТЕСТОВЫЙ РЕЖИМ\n\n" if TEST_MODE else ""
+async def send_test_offer(client, user_link, gift_link, price_stars):
+    # 1. Юзер
+    username = user_link.split("/")[-1].replace("@", "")
+    try:
+        peer = await client.get_input_entity(username)
+    except Exception as e:
+        return f"Не смог найти юзера: {e}"
 
-def card(i):
-    it = ITEMS[i]
-    text = (f"{T}🖼 {it['name']}\n\nЦена: {it['price']}\n"
-            f"Продавец: @{SELLER}\nСтатус: в наличии")
-    kb = Kb([[Btn("🛒 Купить", callback_data=f"buy:{i}"),
-              Btn("ℹ️ Подробнее", url=it["link"])],
-             [Btn("💬 Написать продавцу", url=f"https://t.me/{SELLER}")]])
-    return text, kb
+    # 2. Slug подарка из ссылки
+    m = re.search(r"t\.me/nft/([A-Za-z]+)-(\d+)", gift_link)
+    if not m:
+        return "Ссылка на подарок неверная. Пример: https://t.me/nft/PlushPepe-123"
+    slug = f"{m.group(1)}-{m.group(2)}"
 
-async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    rows = [[Btn(v["name"], callback_data=f"show:{k}")] for k, v in ITEMS.items()]
-    await u.message.reply_text(
-        "Каталог. Добавить подарок: /add <ссылка> <цена>", reply_markup=Kb(rows))
+    # 3. Оффер (тест — 120 секунд)
+    try:
+        res = await client(functions.payments.SendStarGiftOfferRequest(
+            peer=peer,
+            slug=slug,
+            price=StarsAmount(amount=int(price_stars)),
+            duration=120,
+            random_id=random.getrandbits(63),
+            allow_paid_stars=0,
+        ))
+        return f"Оффер ушёл. Ответ: {type(res).__name__}"
+    except Exception as e:
+        return f"Ошибка отправки: {e}"
 
-async def add(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    # /add https://t.me/nft/PlushPepe-123 250 TON
-    if not c.args or not (m := re.match(r"https://t\.me/nft/([A-Za-z]+)-(\d+)", c.args[0])):
-        return await u.message.reply_text("Формат: /add https://t.me/nft/Имя-123 250 TON")
-    i = str(len(ITEMS) + 1)
-    ITEMS[i] = {"name": f"{m[1]} #{m[2]}", "price": " ".join(c.args[1:]) or "договорная",
-                "link": c.args[0]}
-    text, kb = card(i)
-    await u.message.reply_text(text, reply_markup=kb)
+async def main():
+    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    await client.start()   # первый раз попросит телефон и код
 
-async def pin(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    i = c.args[0] if c.args else "1"
-    text, kb = card(i)
-    msg = await u.effective_chat.send_message(text, reply_markup=kb)
-    await c.bot.pin_chat_message(u.effective_chat.id, msg.message_id,
-                                 disable_notification=True)
+    result = await send_test_offer(
+        client,
+        user_link="t.me/someuser",
+        gift_link="https://t.me/nft/PlushPepe-123",
+        price_stars=100,
+    )
+    print(result)
+    await client.disconnect()
 
-async def buttons(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    q = u.callback_query; await q.answer()
-    act, i = q.data.split(":")
-    if act == "show":
-        text, kb = card(i); await q.edit_message_text(text, reply_markup=kb)
-    elif act == "buy":
-        it = ITEMS[i]
-        await q.edit_message_text(
-            f"{T}🛒 Заказ оформлен\n\nТовар: {it['name']}\nЦена: {it['price']}\n"
-            f"Продавец: @{SELLER}\n\nПроверьте подарок по ссылке до оплаты.",
-            reply_markup=Kb([[Btn("🔗 Открыть подарок", url=it["link"]),
-                              Btn("❌ Отменить", callback_data=f"show:{i}")]]))
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("add", add))
-app.add_handler(CommandHandler("pin", pin))
-app.add_handler(CallbackQueryHandler(buttons))
-app.run_polling()
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
